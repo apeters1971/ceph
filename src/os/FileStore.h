@@ -340,7 +340,21 @@ public:
   int get_max_object_name_length();
   int mkfs();
   int mkjournal();
+
+  /**
+   * set_allow_sharded_objects()
+   *
+   * Before sharded ghobject_t can be specified this function must be called
+   *
+   * Once this function is called the FileStore is not mountable by prior releases
+   */
   void set_allow_sharded_objects();
+
+  /**
+   * get_allow_sharded_objects()
+   *
+   * return value: true if set_allow_sharded_objects() called, otherwise false
+   */
   bool get_allow_sharded_objects();
 
   int statfs(struct statfs *buf);
@@ -577,7 +591,22 @@ private:
   atomic_t m_filestore_kill_at;
   FSSuperblock superblock;
 
+  /**
+   * write_superblock()
+   *
+   * Write superblock to persisent storage
+   *
+   * return value: 0 on success, otherwise negative errno
+   */
   int write_superblock();
+
+  /**
+   * read_superblock()
+   *
+   * Fill in FileStore::superblock by reading persistent storage
+   *
+   * return value: 0 on success, otherwise negative errno
+   */
   int read_superblock();
 
   friend class FileStoreBackend;
