@@ -572,6 +572,8 @@ public:
     return oid;
   }
   static void clear_temp(ObjectStore *store, coll_t tmp);
+  static CompatSet get_osd_initial_compat_set();
+  static CompatSet get_osd_compat_set();
   
 
 private:
