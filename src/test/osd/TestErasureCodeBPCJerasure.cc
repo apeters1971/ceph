@@ -502,7 +502,7 @@ TEST_F (ErasureCodeTiming, PropertyOutput) {
   for (timing_map_t::const_iterator techniqueit = timing.begin(); techniqueit != timing.end(); ++techniqueit) {
     for (timing_t::const_iterator modeit = techniqueit->second.begin(); modeit != techniqueit->second.end(); ++modeit) {
       char timingout[4096];
-      double speed = loops * object_size / 1000000l / ((double) modeit->second.realtime()) / 1000.0;
+      double speed = 1.0 * loops * object_size / 1000000l / ((double) modeit->second.realtime()) / 1000.0;
       snprintf(timingout,
                sizeof (timingout) - 1,
                "[ -TIMING- ] technique=%-16s [ %18s ] speed=%02.03f [GB/s] latency=%02.03f ms\n",
