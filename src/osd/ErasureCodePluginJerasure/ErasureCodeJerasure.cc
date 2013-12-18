@@ -4,8 +4,10 @@
  * Ceph - scalable distributed file system
  *
  * Copyright (C) 2013 Cloudwatt <libre.licensing@cloudwatt.com>
+ *               2013 CERN/Switzerland
  *
- * Author: Loic Dachary <loic@dachary.org>
+ * Authors: Loic Dachary <loic@dachary.org>
+ *          Andreas-Joachim Peters <andreas.joachim.peters@cern.ch> 
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public
@@ -18,7 +20,10 @@
 #include <algorithm>
 #include "common/debug.h"
 #include "ErasureCodeJerasure.h"
-extern "C" {
+#include "ErasureCodeLocalParity.h"
+#include "vectorop.h"
+extern "C"
+{
 #include "jerasure.h"
 #include "reed_sol.h"
 #include "galois.h"
@@ -30,8 +35,8 @@ extern "C" {
 #undef dout_prefix
 #define dout_prefix _prefix(_dout)
 
-static ostream& _prefix(std::ostream* _dout)
-{
+static ostream&
+_prefix (std::ostream* _dout) {
   return *_dout << "ErasureCodeJerasure: ";
 }
 
@@ -44,20 +49,36 @@ void ErasureCodeJerasure::init(const map<std::string,std::string> &parameters)
 
 int ErasureCodeJerasure::minimum_to_decode(const set<int> &want_to_read,
                                            const set<int> &available_chunks,
-                                           set<int> *minimum) 
-{
-  if (includes(available_chunks.begin(), available_chunks.end(),
-	       want_to_read.begin(), want_to_read.end())) {
-    *minimum = want_to_read;
-  } else {
-    if (available_chunks.size() < (unsigned)k)
-      return -EIO;
-    set<int>::iterator i;
-    unsigned j;
-    for (i = available_chunks.begin(), j = 0; j < (unsigned)k; ++i, j++)
-      minimum->insert(*i);
+                                           set<int> *minimum) {
+  set<int>::iterator i;
+  set<int>::iterator o;
+
+  if (!lp) {
+    // -----------------------------------------------------------------------
+    // no local parity
+    // -----------------------------------------------------------------------
+    if (includes(available_chunks.begin(), available_chunks.end(),
+		 want_to_read.begin(), want_to_read.end())) {
+      *minimum = want_to_read;
+    } else {
+      if (available_chunks.size() < (unsigned)k)
+	return -EIO;
+      set<int>::iterator i;
+      unsigned j;
+      for (i = available_chunks.begin(), j = 0; j < (unsigned)k; i++, j++)
+	minimum->insert(*i);
+    }
+    return 0;
   }
-  return 0;
+  else {
+    // -------------------------------------------------------------------------
+    // basic pyramid code:local parity
+    // -------------------------------------------------------------------------
+    ErasureCodeLocalParity ecParity(0, 0, k, m, lp, 0);
+    return ecParity.minimum_to_decode(want_to_read,
+                                      available_chunks,
+                                      minimum);
+  }
 }
 
 int ErasureCodeJerasure::minimum_to_decode_with_cost(const set<int> &want_to_read,
@@ -83,20 +104,44 @@ int ErasureCodeJerasure::encode(const set<int> &want_to_encode,
 	   << " to " << padded_length << dendl;
   assert(padded_length % k == 0);
   unsigned blocksize = padded_length / k;
-  unsigned length = blocksize * ( k + m );
+  unsigned length = blocksize * ( k + m + lp );
   bufferlist out(in);
+
   bufferptr pad(length - in.length());
   pad.zero(0, padded_length - in.length());
   out.push_back(pad);
-  char *chunks[k + m];
-  for (int i = 0; i < k + m; i++) {
+  char *chunks[k + m + lp];
+  for (int i = 0; i < k + m + lp; i++) {
     bufferlist &chunk = (*encoded)[i];
     chunk.substr_of(out, i * blocksize, blocksize);
     chunks[i] = chunk.c_str();
   }
-  jerasure_encode(&chunks[0], &chunks[k], blocksize);
-  for (int i = 0; i < k + m; i++) {
-    if (want_to_encode.count(i) == 0)
+
+  bool encode_erasure=false;
+  bool encode_lp=false;
+  // -------------------------------------------------------------------------
+  // check if we need to do erasure encoding and/or local parity encoding
+  // -------------------------------------------------------------------------
+  for (int j=0; j<(int)want_to_encode.size(); j++) {
+    encode_erasure |= (j<k)?true:false;
+    encode_lp |= (j>=k)?true:false;
+  }
+
+  // -------------------------------------------------------------------------
+  // if needed do erasure encoding : jerasure
+  // -------------------------------------------------------------------------
+  if (encode_erasure) jerasure_encode(&chunks[0], &chunks[k], blocksize);
+  // -------------------------------------------------------------------------
+  // if needed do local parity encoding : basic pyramid code
+  // ---------------------------------------------------------------------------
+  if (encode_lp && lp) {
+    ErasureCodeLocalParity ecParity(&chunks[0], &chunks[k + m],
+                                    k, m, lp, blocksize);
+    ecParity.generate();
+  }
+
+  for (int i = 0; i < k + m + lp; i++) {
+    if (!want_to_encode.count(i))
       encoded->erase(i);
   }
   return 0;
@@ -107,17 +152,22 @@ int ErasureCodeJerasure::decode(const set<int> &want_to_read,
                                 map<int, bufferlist> *decoded)
 {
   unsigned blocksize = (*chunks.begin()).second.length();
-  int erasures[k + m + 1];
+  int erasures[k + m + lp + 1];
   int erasures_count = 0;
+  std::set<int>remaining_erasures;
   char *data[k];
-  char *coding[m];
-  for (int i =  0; i < k + m; i++) {
+  char *coding[m + lp];
+  for (int i = 0; i < k + m + lp; i++) {
+    (*decoded)[i].clear();
+
     if (chunks.find(i) == chunks.end()) {
       erasures[erasures_count] = i;
+      remaining_erasures.insert(i);
       erasures_count++;
       bufferptr ptr(blocksize);
       (*decoded)[i].push_front(ptr);
-    } else {
+    }
+    else {
       (*decoded)[i] = chunks.find(i)->second;
     }
     if (i < k)
@@ -127,10 +177,39 @@ int ErasureCodeJerasure::decode(const set<int> &want_to_read,
   }
   erasures[erasures_count] = -1;
 
-  if (erasures_count > 0)
-    return jerasure_decode(erasures, data, coding, blocksize);
-  else
+  if (erasures_count > 0) {
+    // -----------------------------------------------------------------------
+    // try first with local parity : basic pyramid code
+    // -----------------------------------------------------------------------
+    if (lp) {
+      ErasureCodeLocalParity ecParity(data, coding, k, m, lp, blocksize);
+      if (ecParity.reconstruct(remaining_erasures, want_to_read))
+        return 0;
+      // -----------------------------------------------------------------------
+      // local parity was not enough ...
+      // rewrite the erasures array with the remaining blocks to repair
+      // ---------------------------------------------------------------------
+      int i=0;
+      for (std::set<int>::iterator it=remaining_erasures.begin(); 
+	   it!=remaining_erasures.end(); 
+	   ++it) {
+	erasures[i] = *it;
+	i++;
+      }
+      erasures[i]=-1;
+    }
+    // -------------------------------------------------------------------------
+    // do erasure decoding 
+    // -------------------------------------------------------------------------
+    int rc=0;
+    if ((rc = jerasure_decode(erasures, data, coding, blocksize)) ) {
+      (*decoded).clear();
+    }
+    return rc;
+  }
+  else {
     return 0;
+  }
 }
 
 int ErasureCodeJerasure::to_int(const std::string &name,
@@ -192,7 +271,7 @@ int ErasureCodeJerasureReedSolomonVandermonde::jerasure_decode(int *erasures,
 
 unsigned ErasureCodeJerasureReedSolomonVandermonde::get_alignment()
 {
-  return k*w*sizeof(int);
+  return k * w * LARGEST_VECTOR_WORDSIZE;
 }
 
 void ErasureCodeJerasureReedSolomonVandermonde::parse(const map<std::string,std::string> &parameters)
@@ -200,10 +279,16 @@ void ErasureCodeJerasureReedSolomonVandermonde::parse(const map<std::string,std:
   k = to_int("erasure-code-k", parameters, DEFAULT_K);
   m = to_int("erasure-code-m", parameters, DEFAULT_M);
   w = to_int("erasure-code-w", parameters, DEFAULT_W);
+  lp = to_int("erasure-code-lp", parameters, DEFAULT_LOCAL_PARITY);
+
   if (w != 8 && w != 16 && w != 32) {
     derr << "ReedSolomonVandermonde: w=" << w
 	 << " must be one of {8, 16, 32} : revert to 8 " << dendl;
     w = 8;
+  }
+  if (lp > k) {
+    lp=DEFAULT_LOCAL_PARITY;
+    derr << "lp=" << lp << " must be less than or equal to k=" << k << " : reverting to lp=" << lp <<dendl;
   }
 }
 
@@ -232,7 +317,7 @@ int ErasureCodeJerasureReedSolomonRAID6::jerasure_decode(int *erasures,
 
 unsigned ErasureCodeJerasureReedSolomonRAID6::get_alignment()
 {
-  return k*w*sizeof(int);
+  return k * w * LARGEST_VECTOR_WORDSIZE;
 }
 
 void ErasureCodeJerasureReedSolomonRAID6::parse(const map<std::string,std::string> &parameters)
@@ -240,10 +325,16 @@ void ErasureCodeJerasureReedSolomonRAID6::parse(const map<std::string,std::strin
   k = to_int("erasure-code-k", parameters, DEFAULT_K);
   m = 2;
   w = to_int("erasure-code-w", parameters, DEFAULT_W);
+  lp = to_int("erasure-code-lp", parameters, DEFAULT_LOCAL_PARITY);
+
   if (w != 8 && w != 16 && w != 32) {
     derr << "ReedSolomonRAID6: w=" << w
 	 << " must be one of {8, 16, 32} : revert to 8 " << dendl;
     w = 8;
+  }
+  if (lp > k) {
+    lp=DEFAULT_LOCAL_PARITY;
+    derr << "lp=" << lp << " must be less than or equal to k=" << k << " : reverting to lp=" << lp <<dendl;
   }
 }
 
@@ -274,7 +365,7 @@ int ErasureCodeJerasureCauchy::jerasure_decode(int *erasures,
 
 unsigned ErasureCodeJerasureCauchy::get_alignment()
 {
-  return k*w*packetsize*sizeof(int);
+  return k * w * packetsize * (packetsize%LARGEST_VECTOR_WORDSIZE)?LARGEST_VECTOR_WORDSIZE:1;
 }
 
 void ErasureCodeJerasureCauchy::parse(const map<std::string,std::string> &parameters)
@@ -283,6 +374,11 @@ void ErasureCodeJerasureCauchy::parse(const map<std::string,std::string> &parame
   m = to_int("erasure-code-m", parameters, DEFAULT_M);
   w = to_int("erasure-code-w", parameters, DEFAULT_W);
   packetsize = to_int("erasure-code-packetsize", parameters, DEFAULT_PACKETSIZE);
+  lp = to_int("erasure-code-lp", parameters, DEFAULT_LOCAL_PARITY);
+  if (lp > k) {
+    lp=DEFAULT_LOCAL_PARITY;
+    derr << "lp=" << lp << " must be less than or equal to k=" << k << " : reverting to lp=" << lp <<dendl;
+  }
 }
 
 void ErasureCodeJerasureCauchy::prepare_schedule(int *matrix)
@@ -341,7 +437,7 @@ int ErasureCodeJerasureLiberation::jerasure_decode(int *erasures,
 
 unsigned ErasureCodeJerasureLiberation::get_alignment()
 {
-  return k*w*packetsize*sizeof(int);
+  return k * w * packetsize * (packetsize%LARGEST_VECTOR_WORDSIZE)?LARGEST_VECTOR_WORDSIZE:1;
 }
 
 void ErasureCodeJerasureLiberation::parse(const map<std::string,std::string> &parameters)
@@ -350,6 +446,7 @@ void ErasureCodeJerasureLiberation::parse(const map<std::string,std::string> &pa
   m = to_int("erasure-code-m", parameters, DEFAULT_M);
   w = to_int("erasure-code-w", parameters, DEFAULT_W);
   packetsize = to_int("erasure-code-packetsize", parameters, DEFAULT_PACKETSIZE);
+  lp = to_int("erasure-code-lp", parameters, DEFAULT_LOCAL_PARITY);
 
   bool error = false;
   if (k > w) {
@@ -368,6 +465,10 @@ void ErasureCodeJerasureLiberation::parse(const map<std::string,std::string> &pa
     derr << "packetsize=" << packetsize
 	 << " must be a multiple of sizeof(int) = " << sizeof(int) << dendl;
     error = true;
+  }
+  if (lp>k) {
+    lp=DEFAULT_LOCAL_PARITY;
+    derr << "lp=" << lp << " must be less than or equal to k=" << k << " : reverting to lp=" << lp <<dendl;
   }
   if (error) {
     derr << "reverting to k=" << DEFAULT_K << ", w="
@@ -402,6 +503,7 @@ void ErasureCodeJerasureLiber8tion::parse(const map<std::string,std::string> &pa
   m = DEFAULT_M;
   w = DEFAULT_W;
   packetsize = to_int("erasure-code-packetsize", parameters, DEFAULT_PACKETSIZE);
+  lp = to_int("erasure-code-lp", parameters, DEFAULT_LOCAL_PARITY);
 
   bool error = false;
   if (k > w) {
@@ -411,6 +513,10 @@ void ErasureCodeJerasureLiber8tion::parse(const map<std::string,std::string> &pa
   if (packetsize == 0) {
     derr << "packetsize=" << packetsize << " must be set" << dendl;
     error = true;
+  }
+  if (lp > k) {
+    lp=DEFAULT_LOCAL_PARITY;
+    derr << "lp=" << lp << " must be less than or equal to k=" << k << " : reverting to lp=" << lp <<dendl;
   }
   if (error) {
     derr << "reverting to k=" << DEFAULT_K << ", packetsize="

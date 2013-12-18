@@ -199,7 +199,8 @@ namespace ceph {
      * Decode the **chunks** and store at least **want_to_read**
      * chunks in **decoded**.
      *
-     * The **decoded** map must be a pointer to an empty map.
+     * The **decoded** map is automatically cleared before each decoding.
+     * If decoding failed it stays empty.
      *
      * There must be enough **chunks** ( as returned by
      * **minimum_to_decode** or **minimum_to_decode_with_cost** ) to
