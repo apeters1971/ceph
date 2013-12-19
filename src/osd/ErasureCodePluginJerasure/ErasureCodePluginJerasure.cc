@@ -49,6 +49,8 @@ public:
       interface = new ErasureCodeJerasureBlaumRoth();
     } else if (t == "liber8tion") {
       interface = new ErasureCodeJerasureLiber8tion();
+    } else if (t == "isa-l") {
+      interface = new ErasureCodeIntelIsa();
     } else {
       derr << "technique=" << t << " is not a valid coding technique. "
 	   << " Choose one of the following: "

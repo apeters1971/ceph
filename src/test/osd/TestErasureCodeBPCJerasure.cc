@@ -62,7 +62,8 @@ public:
 
 typedef ::testing::Types<
 ErasureCodeJerasureCauchyGood,
-ErasureCodeJerasureLiber8tion
+ErasureCodeJerasureLiber8tion,
+ErasureCodeIntelIsa
 > JerasureTypes;
 TYPED_TEST_CASE (ErasureCodeTest_82, JerasureTypes);
 TYPED_TEST_CASE (ErasureCodeTest_BPC_822_Double_Failure, JerasureTypes);
@@ -75,7 +76,6 @@ TYPED_TEST (ErasureCodeTest_82, encode_decode) {
   parameters["erasure-code-k"] = "8";
   parameters["erasure-code-m"] = "2";
   parameters["erasure-code-w"] = "8";
-
   parameters["erasure-code-packetsize"] = "4096";
   jerasure.init(parameters);
 
@@ -123,6 +123,25 @@ TYPED_TEST (ErasureCodeTest_82, encode_decode) {
     EXPECT_EQ(0, memcmp(decoded[1].c_str(), in.c_str() + length, decoded[1].length()));
   }
 
+  // one chunk is missing 
+  {
+    map<int, bufferlist> degraded = encoded;
+    degraded.erase(0);
+    EXPECT_EQ(9u, degraded.size());
+    int want_to_decode[] = {0};
+    map<int, bufferlist> decoded;
+    timing[jerasure.technique]["reco-1"].start = ceph_clock_now(0);
+    for (size_t i=0; i< loops; i++) 
+      EXPECT_EQ(0, jerasure.decode(set<int>(want_to_decode, want_to_decode + 2),
+				   degraded,
+				   &decoded));
+    timing[jerasure.technique]["reco-1"].stop = ceph_clock_now(0);
+    // always decode all, regardless of want_to_decode
+    EXPECT_EQ(10u, decoded.size());
+    EXPECT_EQ(length, decoded[0].length());
+    EXPECT_EQ(0, memcmp(decoded[1].c_str(), in.c_str() + length, decoded[1].length()));
+  }
+
   // two chunks are missing 
   {
     map<int, bufferlist> degraded = encoded;
@@ -131,12 +150,12 @@ TYPED_TEST (ErasureCodeTest_82, encode_decode) {
     EXPECT_EQ(8u, degraded.size());
     int want_to_decode[] = {0, 1};
     map<int, bufferlist> decoded;
-    timing[jerasure.technique]["reco"].start = ceph_clock_now(0);
+    timing[jerasure.technique]["reco-2"].start = ceph_clock_now(0);
     for (size_t i=0; i< loops; i++) 
       EXPECT_EQ(0, jerasure.decode(set<int>(want_to_decode, want_to_decode + 2),
 				   degraded,
 				   &decoded));
-    timing[jerasure.technique]["reco"].stop = ceph_clock_now(0);
+    timing[jerasure.technique]["reco-2"].stop = ceph_clock_now(0);
     // always decode all, regardless of want_to_decode
     EXPECT_EQ(10u, decoded.size());
     EXPECT_EQ(length, decoded[0].length());
@@ -203,6 +222,31 @@ TYPED_TEST (ErasureCodeTest_BPC_822_Double_Failure, encode_decode) {
     EXPECT_EQ(0, memcmp(decoded[1].c_str(), in.c_str() + length, decoded[1].length()));
   }
 
+  // one chunk missing 
+  {
+    map<int, bufferlist> degraded = encoded;
+    degraded.erase(0);
+    EXPECT_EQ(11u, degraded.size());
+    int want_to_decode[] = {0};
+    map<int, bufferlist> decoded;
+    
+    timing[jerasure.technique]["reco-1-0-bpc"].start = ceph_clock_now(0);
+    for (size_t i=0; i< loops; i++) 
+      EXPECT_EQ(0, jerasure.decode(set<int>(want_to_decode, want_to_decode + 2),
+				   degraded,
+				   &decoded));
+    timing[jerasure.technique]["reco-1-0-bpc"].stop = ceph_clock_now(0);
+    // always decode all, regardless of want_to_decode
+    EXPECT_EQ(12u, decoded.size());
+    EXPECT_EQ(length, decoded[0].length());
+    EXPECT_EQ(length, decoded[1].length());
+    EXPECT_EQ(length, decoded[2].length());
+    EXPECT_EQ(length, decoded[3].length());
+    EXPECT_EQ(length, decoded[4].length());
+    EXPECT_EQ(length, decoded[5].length());
+    EXPECT_EQ(0, memcmp(decoded[0].c_str(), in.c_str(), length));
+  }
+
   // two chunks are missing 
   {
     map<int, bufferlist> degraded = encoded;
@@ -211,12 +255,12 @@ TYPED_TEST (ErasureCodeTest_BPC_822_Double_Failure, encode_decode) {
     EXPECT_EQ(10u, degraded.size());
     int want_to_decode[] = {0, 5};
     map<int, bufferlist> decoded;
-    timing[jerasure.technique]["reco-bpc"].start = ceph_clock_now(0);
+    timing[jerasure.technique]["reco-2-0-bpc"].start = ceph_clock_now(0);
     for (size_t i=0; i< loops; i++) 
       EXPECT_EQ(0, jerasure.decode(set<int>(want_to_decode, want_to_decode + 2),
 				   degraded,
 				   &decoded));
-    timing[jerasure.technique]["reco-bpc"].stop = ceph_clock_now(0);
+    timing[jerasure.technique]["reco-2-0-bpc"].stop = ceph_clock_now(0);
     // always decode all, regardless of want_to_decode
     EXPECT_EQ(12u, decoded.size());
     EXPECT_EQ(length, decoded[0].length());
@@ -257,13 +301,13 @@ TYPED_TEST (ErasureCodeTest_BPC_822_Triple_Failure, encode_decode) {
   int want_to_encode[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
   map<int, bufferlist> encoded;
 
-  timing[jerasure.technique]["encode-bpc-triple"].start = ceph_clock_now(0);
+  timing[jerasure.technique]["encode-3-bpc"].start = ceph_clock_now(0);
   for (size_t i=0; i< loops; i++) 
   EXPECT_EQ(0, jerasure.encode(set<int>(want_to_encode, want_to_encode + 12),
                                in,
                                &encoded));
 
-  timing[jerasure.technique]["encode-bpc-triple"].stop = ceph_clock_now(0);
+  timing[jerasure.technique]["encode-3-bpc"].stop = ceph_clock_now(0);
   EXPECT_EQ(12u, encoded.size());
   unsigned length = encoded[0].length();
   EXPECT_EQ(0, memcmp(encoded[0].c_str(), in.c_str(), length));
@@ -294,12 +338,12 @@ TYPED_TEST (ErasureCodeTest_BPC_822_Triple_Failure, encode_decode) {
     EXPECT_EQ(9u, degraded.size());
     int want_to_decode[] = {0, 5, 6};
     map<int, bufferlist> decoded;
-    timing[jerasure.technique]["reco-bpc-triple"].start = ceph_clock_now(0);
+    timing[jerasure.technique]["reco-1-2-bpc"].start = ceph_clock_now(0);
     for (size_t i=0; i< loops; i++) 
       EXPECT_EQ(0, jerasure.decode(set<int>(want_to_decode, want_to_decode + 3),
 				   degraded,
 				   &decoded));
-    timing[jerasure.technique]["reco-bpc-triple"].stop = ceph_clock_now(0);
+    timing[jerasure.technique]["reco-1-2-bpc"].stop = ceph_clock_now(0);
     // always decode all, regardless of want_to_decode
     EXPECT_EQ(12u, decoded.size());
     EXPECT_EQ(length, decoded[0].length());
@@ -474,7 +518,7 @@ TYPED_TEST (ErasureCodeTest_BPC_822_CRC32C, encode_decode) {
     EXPECT_EQ(10u, degraded.size());
     int want_to_decode[] = {0, 5};
     map<int, bufferlist> decoded;
-    timing[jerasure.technique]["reco-bpc-crc32c"].start = ceph_clock_now(0);
+    timing[jerasure.technique]["reco-2-0-bpc-crc32c"].start = ceph_clock_now(0);
     for (size_t i=0; i< loops; i++) {
       EXPECT_EQ(0, jerasure.decode(set<int>(want_to_decode, want_to_decode + 2),
 				   degraded,
@@ -486,7 +530,7 @@ TYPED_TEST (ErasureCodeTest_BPC_822_CRC32C, encode_decode) {
       }
     }
 
-    timing[jerasure.technique]["reco-bpc-crc32c"].stop = ceph_clock_now(0);
+    timing[jerasure.technique]["reco-2-0-bpc-crc32c"].stop = ceph_clock_now(0);
     // always decode all, regardless of want_to_decode
     EXPECT_EQ(12u, decoded.size());
     EXPECT_EQ(length, decoded[0].length());

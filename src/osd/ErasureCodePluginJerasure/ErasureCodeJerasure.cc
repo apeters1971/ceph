@@ -22,6 +22,7 @@
 #include "ErasureCodeJerasure.h"
 #include "ErasureCodeLocalParity.h"
 #include "vectorop.h"
+
 extern "C"
 {
 #include "jerasure.h"
@@ -533,6 +534,7 @@ ErasureCodeJerasureBlaumRoth::prepare ()
   schedule = jerasure_smart_bitmatrix_to_schedule(k, m, w, bitmatrix);
 }
 
+
 // 
 // ErasureCodeJerasureLiber8tion
 //
@@ -573,3 +575,152 @@ ErasureCodeJerasureLiber8tion::prepare ()
   bitmatrix = liber8tion_coding_bitmatrix(k);
   schedule = jerasure_smart_bitmatrix_to_schedule(k, m, w, bitmatrix);
 }
+
+// 
+// ErasureCodeIntelIsa
+//
+
+void
+ErasureCodeIntelIsa::parse (const map<std::string, std::string> &parameters)
+{
+  k = to_int("erasure-code-k", parameters, DEFAULT_K);
+  m = to_int("erasure-code-m", parameters, DEFAULT_M);
+  lp = to_int("erasure-code-lp", parameters, DEFAULT_LOCAL_PARITY);
+
+  if (lp > k) {
+    derr << "lp=" << lp << " must be less than or equal to k=" << k << " : reverting to lp=" << DEFAULT_LOCAL_PARITY << dendl;
+    lp = DEFAULT_LOCAL_PARITY;
+  }
+
+  if (k > 64) {
+    derr << "k=" << k << " must be less than or equal to k=64 : reverting to k=" << DEFAULT_K << dendl;
+    k = DEFAULT_K;
+  }
+  
+  if ( (k+m) > 64) {
+    derr << "(m+k)=" << (m+k) << " must be less than or equal to (m+k)=96 : reverting to m=" << (96-k) << dendl;
+    m = 96-k;
+  }
+
+  std::string isa_lib ="";
+
+  if (parameters.find("intel-isa-lib")!=parameters.end()) {
+    isa_lib = parameters.find("intel-isa-lib")->second;
+  } else {
+    isa_lib = "isa-l.so";
+  }
+
+  IsaLibrary = dlopen(isa_lib.c_str(), RTLD_LAZY);
+  if (!IsaLibrary) {
+    derr << "unable to open isa-library " << isa_lib << dendl;
+  } else {
+    Isa_GenRsMatrix    = (void (*)(unsigned char*, int, int))dlsym(IsaLibrary,"gf_gen_rs_matrix");
+    Isa_GfInvertMatrix = (int  (*)(unsigned char *, unsigned char *, int ))dlsym(IsaLibrary,"gf_invert_matrix");
+    Isa_EcInitTables   = (void (*)(int, int, unsigned char*, unsigned char*))dlsym(IsaLibrary,"ec_init_tables");
+    Isa_EcEncodeData   = (void (*)(int, int, int, unsigned char*, unsigned char**, unsigned char**))dlsym(IsaLibrary,"ec_encode_data");
+    
+    assert(Isa_GenRsMatrix);
+    assert(Isa_GfInvertMatrix);
+    assert(Isa_EcInitTables);
+    assert(Isa_EcEncodeData);
+  }
+  assert(IsaLibrary);
+}
+
+void
+ErasureCodeIntelIsa::prepare ()
+{
+  (*Isa_GenRsMatrix)(a, k+m, k);
+  (*Isa_EcInitTables)(k,m,&a[k*k], g_tbls);
+}
+
+unsigned
+ErasureCodeIntelIsa::get_alignment ()
+{
+  return k * m * 64;
+}
+
+void
+ErasureCodeIntelIsa::jerasure_encode (char **data,
+				      char **coding,
+				      int blocksize)
+{
+  (Isa_EcEncodeData)(blocksize, k, m, g_tbls, (unsigned char**)data, (unsigned char**)coding);
+  return;
+}
+
+bool
+ErasureCodeIntelIsa::erasure_contains(int *erasures, int i)
+{
+  for (int l=0; erasures[l]!=-1; l++) {
+    if (erasures[l] == i)
+      return true;
+  }
+  return false;
+}
+int
+ErasureCodeIntelIsa::jerasure_decode (int *erasures,
+				      char **data,
+				      char **coding,
+				      int blocksize)
+{
+  int nerrs=0;
+  int i,j,r,s;
+  // count the errors 
+  for (int l=0; erasures[l]!=-1; l++) {
+    nerrs++;
+  }
+  unsigned char *recover_source[64];
+  unsigned char *recover_target[64];
+  memset(recover_source,0, sizeof(recover_source));
+  memset(recover_target,0, sizeof(recover_target));
+
+  if (nerrs > m) 
+    return -1;
+
+  // Construct b by removing error rows
+
+  for(i=0, r=0; i<k; i++, r++) {
+    while (erasure_contains(erasures,r))
+      r++;
+    for(j=0; j<k; j++)
+      b[k*i+j] = a[k*r+j];
+  }
+  
+  if ((*Isa_GfInvertMatrix)(b, d, k) < 0){
+    printf("BAD MATRIX\n");
+    return -1;
+  }
+
+  for(i=0, r=0, s=0; i<k; i++, r++){
+    while (erasure_contains(erasures,r)) {
+      if (r<k) {
+	recover_target[s] = (unsigned char*)data[r];
+      } else {
+	recover_target[s] = (unsigned char*)coding[r-k];
+      }
+      r++;
+      s++;
+    }
+    if (r<k) {
+      recover_source[i] = (unsigned char*)data[r];
+    }
+    else {
+      recover_source[i] = (unsigned char*)coding[r-k];
+    }
+  }
+
+  for(i=0; i<nerrs; i++){
+    for(j=0; j<k; j++){
+      c[k*i+j]=d[k*erasures[i]+j];
+    }
+  }
+  
+  // Recover data
+  (*Isa_EcInitTables)(k, nerrs, c, g_tbls);
+  (*Isa_EcEncodeData)(blocksize,
+			     k, nerrs, g_tbls, recover_source, recover_target);
+  return 0;
+}
+
+// 

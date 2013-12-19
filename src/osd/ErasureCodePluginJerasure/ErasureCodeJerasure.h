@@ -20,6 +20,7 @@
 #define CEPH_ERASURE_CODE_JERASURE_H
 
 #include "osd/ErasureCodeInterface.h"
+#include <dlfcn.h>
 
 class ErasureCodeJerasure : public ErasureCodeInterface {
 public:
@@ -227,6 +228,48 @@ public:
 
   virtual void parse(const map<std::string,std::string> &parameters);
   virtual void prepare();
+};
+
+class ErasureCodeIntelIsa : public ErasureCodeJerasure {
+public:
+  static const int DEFAULT_K = 2;
+  static const int DEFAULT_M = 2;
+  void* IsaLibrary;
+  void (*Isa_GenRsMatrix)(unsigned char *a, int mk, int k);
+  int  (*Isa_GfInvertMatrix)(unsigned char *in, unsigned char *out, int k);
+  void (*Isa_EcInitTables)(int k, int rows, unsigned char* a, 
+			  unsigned char* g_tbls);
+  void (*Isa_EcEncodeData)(int len, int k, int rows, unsigned char *g_tbls, unsigned char **data, unsigned char **coding);
+
+  unsigned char a[96*64]; // 96 = Max(M+K), 64 = Max(k);
+  unsigned char b[96*64]; // 96 = Max(M+K), 64 = Max(k);
+  unsigned char c[96*64]; // 96 = Max(M+K), 64 = Max(k);
+  unsigned char d[96*64]; // 96 = Max(M+K), 64 = Max(k);
+  unsigned char g_tbls[64*64*32]; // 64 ~ max allowed value of k
+
+  bool erasure_contains(int *erasures,int i);
+
+  ErasureCodeIntelIsa() :
+    ErasureCodeJerasure("isa-l"),IsaLibrary(0), Isa_GenRsMatrix(0), Isa_EcInitTables(0), Isa_EcEncodeData(0)
+  {}
+    
+  virtual ~ErasureCodeIntelIsa() {
+    if (IsaLibrary)
+      dlclose(IsaLibrary);
+  }
+  
+  virtual unsigned get_alignment();
+  virtual void parse(const map<std::string,std::string> &parameters);
+  virtual void prepare();
+
+  virtual void jerasure_encode(char **data,
+                               char **coding,
+                               int blocksize);
+
+  virtual int jerasure_decode(int *erasures,
+			      char **data,
+			      char **coding,
+			      int blocksize);
 };
 
 #endif
