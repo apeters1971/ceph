@@ -105,7 +105,26 @@ unittest_erasure_code_plugin_jerasure_LDADD += -ldl
 endif
 check_PROGRAMS += unittest_erasure_code_plugin_jerasure
 
-unittest_erasure_code_example_SOURCES = test/erasure-code/TestErasureCodeExample.cc 
+unittest_erasure_code_intel_isal_SOURCES = erasure-code/isa-l/ErasureCodeIntelIsa.cc \
+	test/erasure-code/TestErasureCodeIntelIsa.cc
+unittest_erasure_code_intel_isal_CXXFLAGS = ${AM_CXXFLAGS} ${UNITTEST_CXXFLAGS}
+unittest_erasure_code_intel_isal_LDADD = $(LIBOSD) $(LIBCOMMON) $(UNITTEST_LDADD) $(CEPH_GLOBAL)
+if LINUX
+unittest_erasure_code_intel_isal_LDADD += -ldl
+endif
+check_PROGRAMS += unittest_erasure_code_intel_isal
+
+unittest_erasure_code_plugin_intel_isal_SOURCES = \
+	test/erasure-code/TestErasureCodePluginIntelIsa.cc
+unittest_erasure_code_plugin_intel_isal_CXXFLAGS = ${AM_CXXFLAGS} ${UNITTEST_CXXFLAGS}
+unittest_erasure_code_plugin_intel_isal_LDADD = $(LIBOSD) $(LIBCOMMON) $(UNITTEST_LDADD) $(CEPH_GLOBAL)
+if LINUX
+unittest_erasure_code_plugin_intel_isal_LDADD += -ldl
+endif
+check_PROGRAMS += unittest_erasure_code_plugin_intel_isal
+
+unittest_erasure_code_example_SOURCES = test/jerasure-code/TestErasureCodeExample.cc
+ 
 noinst_HEADERS += test/erasure-code/ErasureCodeExample.h
 unittest_erasure_code_example_CXXFLAGS = $(UNITTEST_CXXFLAGS)
 unittest_erasure_code_example_LDADD = $(LIBOSD) $(LIBCOMMON) $(UNITTEST_LDADD) $(CEPH_GLOBAL)

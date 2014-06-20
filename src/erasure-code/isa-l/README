@@ -1,0 +1,129 @@
+============================================
+INTEL ISA library Erasure Coding plugin
+============================================
+
+Build Requirements
+==================
+Plug-in build uses only the embedded ISA header erasure_code.h
+
+
+Run-time Requirements
+=====================
+Running the plugin requires the shared library version of ISA-L.
+Sources are here: https://01.org/sites/default/files/isa-l_open_src_2.10.tar.gz
+Use 'make slib' to build the shared library. 
+
+Plug-in Configuration
+=====================
+
+Used parameters are:
+k : number of data chunks
+m : number of coding chunks
+intel-isa-lib : full path to isa-l.so shared library
+
+If isa-l.so is in the standard library search path 'intel-isa-lib' has not to be 
+specified.
+The plug-in currently exports only a single encoding technique (reed_sol_van) which
+is the default and has not to be specified.
+
+Run the Test suite
+==================
+cd ceph/src
+make unittest_erasure_code_intel_isal
+./unittest_erasure_code_intel_isa --gtest_filter=*.* --log-to-stderr=true --debug-ods=20
+
+Run the CEPH erasure code benchmark
+===================================
+cd ceph/src
+make ceph_erasure_code_benchmark
+
+# consult ./ceph_erasure_code_benchmark -h for help
+
+# encode performance
+./ceph_erasure_code_benchmark -p intel_isal -P k=8 -P m=3 -S 1048576 -i 1000
+
+# decode performance one lost
+./ceph_erasure_code_benchmark -e 1 -w decode -p intel_isal -P k=8 -P m=3 -S 1048576 -i 1000
+
+# decode performance two lost
+./ceph_erasure_code_benchmark -e 2 -w decode -p intel_isal -P k=8 -P m=3 -S 1048576 -i 1000
+
+# decode performance three lost
+./ceph_erasure_code_benchmark -e 3 -w decode -p intel_isal -P k=8 -P m=3 -S 1048576 -i 1000
+
+
+Developer Notes
+===============
+The plugin-uses 64 byte aligned buffers. The encoding tables are computed only
+once when the EC object is created. Decoding Tables have to be computed for 
+each decoding since the available data/coding sources may change between calls.
+A possible optimization is to keep the tables and only recompute them when the 
+decoding configuration has changed. If decoding has to be thread-safe decoding
+tables might use thread-local memory.
+
+There is some duplicated code used from the Jerasure plug-in in this plug-in
+library. The overlapping code should be extracted into a common base. Since the
+EC interface is currently refactored after Firefly this has not yet been done.
+
+The current 'ceph_erasure_code_benchmark' does not only decode data chunks but 
+also coding chunks. If a coding chunk is missing the implementation decodes all
+missing data chunks and then re-encodes all coding chunks. The encoding function
+should be optimized to only encode the required coding chunks.
+
+Example Benchmark 'ISA compared to Jerasure 2.0 RS(9,3)'
+=================
+Intel Xeon CPU Er-2650 v2 @ 2.600 GHZ (cache size 20M)
+
+For this measurements the benchmark suite has been patched to reconstruct only data
+chunks! There is always a second measurement for an implementation where the
+decoding matrix is stored in a thread private variable and not anymore recomputed.
+
+#############################
+### Encoding 4kB objects ####
+#############################
+./ceph_erasure_code_benchmark -P technique=reed_sol_van -p jerasure -i 1000000 -s 4096 -P k=9 -P m=3
+# 4.762464    4000000.
+/ceph_erasure_code_benchmark -p intel_isal -i 1000000 -s 4096 -P k=9 -P m=3
+
+#############################
+### Decoding 4kB objects ####
+#############################
+# 3.195589    4000000
+./ceph_erasure_code_benchmark -P technique=reed_sol_van -p jerasure -i 1000000 -s 4096 -P k=9 -P m=3 -w decode -e 1
+# 7.547367    4000000
+./ceph_erasure_code_benchmark -P technique=reed_sol_van -p jerasure -i 1000000 -s 4096 -P k=9 -P m=3 -w decode -e 2
+# 9.299215    4000000
+./ceph_erasure_code_benchmark -P technique=reed_sol_van -p jerasure -i 1000000 -s 4096 -P k=9 -P m=3 -w decode -e 3
+# 10.874054    4000000
+./ceph_erasure_code_benchmark -p intel_isal -i 1000000 -s 4096 -P k=9 -P m=3 -w decode -e 1 
+# 12.668397    4000000
+## with patch remembering decoding matrix # 7.214137   4000000   
+./ceph_erasure_code_benchmark -p intel_isal -i 1000000 -s 4096 -P k=9 -P m=3 -w decode -e 2
+# 12.933672    4000000
+## with patch remembering decoding matrix # 7.658521   4000000   
+./ceph_erasure_code_benchmark -p intel_isal -i 1000000 -s 4096 -P k=9 -P m=3 -w decode -e 3
+# 13.371475    4000000
+## with patch remembering decoding matrix # 7.666914   4000000  
+
+#############################
+### Encoding 1MB objects ####
+#############################
+./ceph_erasure_code_benchmark -P technique=reed_sol_van -p jerasure -i 10000 -s 1048576 -P k=9 -P m=3
+# 2.935430    10240000
+./ceph_erasure_code_benchmark -p intel_isal -i 10000 -s 1048576 -P k=9 -P m=3
+# 2.079766    10240000
+./ceph_erasure_code_benchmark -P technique=reed_sol_van -p jerasure -i 10000 -s 1048576 -P k=9 -P m=3 -w decode -e 1
+# 1.671158    10240000
+./ceph_erasure_code_benchmark -P technique=reed_sol_van -p jerasure -i 10000 -s 1048576 -P k=9 -P m=3 -w decode -e 2
+# 2.551221    10240000
+./ceph_erasure_code_benchmark -P technique=reed_sol_van -p jerasure -i 10000 -s 1048576 -P k=9 -P m=3 -w decode -e 3
+# 3.458227    10240000
+./ceph_erasure_code_benchmark -p intel_isal -i 10000 -s 1048576 -P k=9 -P m=3 -w decode -e 1
+# 2.189436    10240000
+./ceph_erasure_code_benchmark -p intel_isal -i 10000 -s 1048576 -P k=9 -P m=3 -w decode -e 2
+# 2.669898    10240000
+./ceph_erasure_code_benchmark -p intel_isal -i 10000 -s 1048576 -P k=9 -P m=3 -w decode -e 3
+# 3.212892    10240000
+
+
+

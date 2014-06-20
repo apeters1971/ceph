@@ -3,6 +3,7 @@ erasure_codelibdir = $(pkglibdir)/erasure-code
 erasure_codelib_LTLIBRARIES =  
 
 include erasure-code/jerasure/Makefile.am
+include erasure-code/isa-l/Makefile.am
 
 liberasure_code_la_SOURCES = \
 	erasure-code/ErasureCodePlugin.cc
