@@ -34,7 +34,7 @@
 
 class ErasureCodeIsaTableCache  {
   // ---------------------------------------------------------------------------
-  // This class implements an table caches for encoding and decoding matrixes.
+  // This class implements a table caches for encoding and decoding matrixes.
   // Encoding matrixes are shared for the same (k,m) combination. It supplies
   // a decoding matrix lru cache which is shared for identical
   // matrix types e.g. there is one cache (lru-list + lru-map) for Cauchy and 
@@ -140,8 +140,10 @@ public:
   {
     Mutex::Locker lock(codec_tables_guard);
     // create a pointer to store an encoding table address
-    if (! encoding_table[matrix][k][m] ) 
+    if (! encoding_table[matrix][k][m] ) { 
       encoding_table[matrix][k][m] = new (unsigned char*);
+      *encoding_table[matrix][k][m] = 0;
+    }
     return encoding_table[matrix][k][m];
   }
 
@@ -149,8 +151,10 @@ public:
   {
     Mutex::Locker lock(codec_tables_guard);
     // create a pointer to store an encoding coefficients adddress
-    if (! encoding_coefficient[matrix][k][m] ) 
+    if (! encoding_coefficient[matrix][k][m] ) {
       encoding_coefficient[matrix][k][m] = new (unsigned char*);
+      *encoding_coefficient[matrix][k][m] = 0;
+    }
     return encoding_coefficient[matrix][k][m];
   }
 
